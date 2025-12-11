@@ -150,7 +150,7 @@ function SceneContent() {
 
             {/* Render Nodes */}
             {nodes.map((node, i) => (
-                <Node key={i} position={[node.position.x, node.position.y, node.position.z]} offset={node.offset} />
+                <Node key={i} position={[node.position.x, node.position.y, node.position.z]} offset={node.offset} seed={node.seed} />
             ))}
 
             {/* Render Connection Lines */}
@@ -172,7 +172,7 @@ function SceneContent() {
 
             {/* Render Packets with Trails */}
             {packets.map((p, i) => (
-                <Packet key={`packet-${i}`} start={p.start} end={p.end} />
+                <Packet key={`packet-${i}`} start={p.start} end={p.end} seed={p.seed} />
             ))}
         </>
     );

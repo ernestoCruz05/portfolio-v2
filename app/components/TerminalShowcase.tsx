@@ -94,9 +94,9 @@ const projects: Record<string, {
     },
     "homelab": {
         name: "Home Lab",
-        desc: "Proxmox Cluster",
-        longDesc: "Self-hosted virtualization cluster running Proxmox VE with ZFS storage, high-availability configuration, and automated VM provisioning via Ansible.",
-        stack: ["Proxmox", "ZFS", "Ansible", "HA"],
+        desc: "Dockerized Services Server",
+        longDesc: "Self-hosted services on a Fedora Server using Docker containers. All containers are set to automatically restart after power failures, and the server is protected by a dedicated UPS-style backup power unit",
+        stack: ["Docker", "ZFS", "UPS", "Fedora", "HA"],
         link: "#",
         color: "#f59e0b",
     },
@@ -507,7 +507,7 @@ Connection established! Ready to collaborate. `,
 │
 └──   infrastructure/
     ├── unix-ipc       Low-level Message Queue
-    └── homelab        Proxmox Cluster
+    └── homelab        Dockerized Services Server
 
 6 projects, 3 categories`}
                                 </pre>
