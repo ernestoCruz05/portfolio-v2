@@ -51,8 +51,9 @@ const projects = [
     },
 ];
 
-function ProjectCard({ project, index, total }: { project: typeof projects[number]; index: number; total: number }) {
-    const mesh = useRef<THREE.Group>(null!);
+function ProjectCard({ project, index }: { project: typeof projects[number]; index: number }) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const mesh = useRef<any>(null);
     const [hovered, setHover] = useState(false);
     useCursor(hovered);
 
@@ -144,7 +145,7 @@ export default function ProjectShowcase() {
 
                 <group position={[0, 0.5, 0]}>
                     {projects.map((project, i) => (
-                        <ProjectCard key={i} project={project} index={i} total={projects.length} />
+                        <ProjectCard key={i} project={project} index={i} />
                     ))}
                 </group>
             </Canvas>
