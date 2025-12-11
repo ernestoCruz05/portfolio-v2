@@ -74,7 +74,6 @@ function ProjectCard({ project, index, total }: { project: typeof projects[numbe
 
     return (
         <Float speed={2} rotationIntensity={0.2} floatIntensity={0.5}>
-            {/* @ts-expect-error - framer-motion-3d ref type incompatibility with Three.js */}
             <motion.group
                 ref={mesh}
                 position={[x, y, 0]}
