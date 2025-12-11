@@ -1,0 +1,13 @@
+services:
+  portfolio:
+    build: .
+    container_name: portfolio-v2
+    restart: unless-stopped
+    expose:
+      - "3000"
+    networks:
+      - web-public
+
+networks:
+  web-public:
+    external: true
