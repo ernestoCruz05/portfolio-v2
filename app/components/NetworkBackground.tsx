@@ -5,6 +5,12 @@ import { Trail } from "@react-three/drei";
 import { useRef, useMemo, useState } from "react";
 import * as THREE from "three";
 
+// Seeded random for consistent SSR/client values
+function seededRandom(seed: number) {
+    const x = Math.sin(seed * 9999) * 10000;
+    return x - Math.floor(x);
+}
+
 // --- CAMERA RIG COMPONENT ---
 // Moves the camera slightly based on mouse position for a 3D parallax effect
 function CameraRig() {
@@ -19,12 +25,12 @@ function CameraRig() {
 }
 
 // --- SINGLE NODE COMPONENT ---
-function Node({ position, offset }: { position: [number, number, number], offset: number }) {
+function Node({ position, offset, seed }: { position: [number, number, number], offset: number, seed: number }) {
     const group = useRef<THREE.Group>(null);
     const lightRef = useRef<THREE.Mesh>(null);
 
-    // Random blink speed for each node
-    const blinkSpeed = useMemo(() => 2 + Math.random() * 5, []);
+    // Seeded blink speed for consistent SSR
+    const blinkSpeed = useMemo(() => 2 + seededRandom(seed) * 5, [seed]);
 
     useFrame((state) => {
         if (group.current) {
@@ -70,10 +76,10 @@ function Node({ position, offset }: { position: [number, number, number], offset
 }
 
 // --- PACKET COMPONENT ---
-function Packet({ start, end }: { start: THREE.Vector3, end: THREE.Vector3 }) {
+function Packet({ start, end, seed }: { start: THREE.Vector3, end: THREE.Vector3, seed: number }) {
     const mesh = useRef<THREE.Mesh>(null);
     const [progress, setProgress] = useState(0);
-    const speed = useMemo(() => 0.005 + Math.random() * 0.008, []);
+    const speed = useMemo(() => 0.005 + seededRandom(seed) * 0.008, [seed]);
 
     useFrame(() => {
         if (mesh.current) {
@@ -110,11 +116,12 @@ function SceneContent() {
         for (let i = 0; i < count; i++) {
             temp.push({
                 position: new THREE.Vector3(
-                    (Math.random() - 0.5) * 35,
-                    (Math.random() - 0.5) * 20,
-                    (Math.random() - 0.5) * 15
+                    (seededRandom(i * 3) - 0.5) * 35,
+                    (seededRandom(i * 3 + 1) - 0.5) * 20,
+                    (seededRandom(i * 3 + 2) - 0.5) * 15
                 ),
-                offset: Math.random() * Math.PI * 2,
+                offset: seededRandom(i * 7) * Math.PI * 2,
+                seed: i,
             });
         }
         return temp;
@@ -129,8 +136,8 @@ function SceneContent() {
                 const dist = nodes[i].position.distanceTo(nodes[j].position);
                 if (dist < connectionDist) {
                     _edges.push({ start: nodes[i].position, end: nodes[j].position });
-                    if (Math.random() > 0.8) {
-                        _packets.push({ start: nodes[i].position, end: nodes[j].position });
+                    if (seededRandom(i * 100 + j) > 0.8) {
+                        _packets.push({ start: nodes[i].position, end: nodes[j].position, seed: i * 100 + j });
                     }
                 }
             }
