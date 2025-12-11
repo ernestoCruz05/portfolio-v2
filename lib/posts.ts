@@ -12,6 +12,7 @@ export interface PostMeta {
     tags: string[];
     readingTime: string;
     published: boolean;
+    draft: boolean;
 }
 
 export interface Post extends PostMeta {
@@ -51,6 +52,7 @@ export function getAllPosts(): PostMeta[] {
                 tags: data.tags || [],
                 readingTime: calculateReadingTime(content),
                 published: data.published !== false,
+                draft: data.draft === true,
             };
         })
         .filter((post) => post.published)
@@ -74,6 +76,7 @@ export function getPostBySlug(slug: string): Post | null {
             tags: data.tags || [],
             readingTime: calculateReadingTime(content),
             published: data.published !== false,
+            draft: data.draft === true,
             content,
         };
     } catch {

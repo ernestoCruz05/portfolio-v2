@@ -1,0 +1,173 @@
+---
+title: "UDP vs TCP: Designing a Dual-Protocol Voice Chat"
+date: "2025-12-10"
+description: "Why TCP is terrible for voice, how to map UDP packets to authenticated sessions, and the jitter buffer problem."
+tags: ["rust", "networking", "async", "tokio"]
+published: true
+---
+
+## The Problem with TCP for Voice
+
+RustyRoom started as a text chat server. TCP was the obvious choice - reliable, ordered delivery. Messages arrive intact and in sequence. Perfect.
+
+Then I wanted to add voice. And TCP's guarantees became liabilities.
+
+### Head-of-Line Blocking
+
+TCP guarantees ordered delivery. If packet #5 is lost, packets #6, #7, #8 sit in a buffer waiting for the retransmission. Your audio stream freezes until that one packet makes it.
+
+For text, this is fine. A 200ms delay on a chat message is invisible.
+
+For voice, 200ms of silence followed by a burst of buffered audio is *brutal*. The human ear notices latency above ~150ms. It breaks the conversational flow.
+
+### The Insight
+
+Voice is **loss-tolerant but latency-sensitive**. Text is **loss-intolerant but latency-tolerant**.
+
+A dropped voice packet? Skip it. The Opus codec handles packet loss gracefully - it interpolates, conceals gaps. A 20ms blip is barely noticeable.
+
+A dropped text message? Unacceptable. You can't have chat messages disappearing.
+
+This is why voice needs UDP.
+
+## The Dual-Protocol Design
+
+<Mermaid chart={`
+flowchart TB
+    subgraph Client
+        TCP[TCP Connection<br/>- Authentication<br/>- Text messages<br/>- Room management<br/>- Reliable signaling]
+        UDP[UDP Socket<br/>- Voice packets<br/>- No handshake<br/>- Fire and forget]
+    end
+    
+    subgraph Server
+        TCPListener[TCP Listener]
+        Session[Session Manager]
+        UDPListener[UDP Listener]
+        
+        TCPListener --> Session
+        UDPListener --> Session
+        Session --> |Map UDP packets<br/>via session token| TCPListener
+    end
+    
+    TCP --> TCPListener
+    UDP --> UDPListener
+`} />
+
+The TCP connection handles everything that needs reliability: login, room joins, text chat, presence updates.
+
+The UDP socket handles voice: raw Opus frames, minimal framing, no retransmission.
+
+### The Mapping Problem
+
+UDP is connectionless. When a voice packet arrives, how do we know who sent it? Unlike TCP, there's no persistent connection to associate with a user.
+
+**Solution: Embed a session token in every UDP packet.**
+
+```rust
+struct VoicePacket {
+    session_token: [u8; 16],  // Links to TCP session
+    sequence: u32,            // For ordering/jitter buffer
+    timestamp: u32,           // RTP-style timestamp
+    opus_data: Vec<u8>,       // The actual audio
+}
+```
+
+The flow:
+1. Client authenticates over TCP, receives a session token
+2. Client includes this token in every UDP voice packet
+3. Server validates token, maps packet to the authenticated user
+4. Server forwards to other users in the room
+
+### Security Consideration
+
+The session token must be unpredictable (cryptographically random) and short-lived. If someone sniffs it, they can inject voice packets. In a production system, you'd want:
+
+- Token rotation (new token every N minutes)
+- IP binding (only accept UDP from the IP that authenticated via TCP)
+- Optional: DTLS for encrypted UDP (but adds latency)
+
+## The Jitter Buffer
+
+UDP packets arrive out of order. Network paths vary. Packet #5 might arrive after #7.
+
+If you play packets as they arrive, you get garbled audio. If you wait too long to reorder, you add latency.
+
+The jitter buffer is the tradeoff:
+
+```rust
+struct JitterBuffer {
+    buffer: BTreeMap<u32, VoicePacket>,  // Ordered by sequence
+    play_delay: Duration,                 // How long to buffer
+    last_played: u32,                     // Last sequence we played
+}
+
+impl JitterBuffer {
+    fn push(&mut self, packet: VoicePacket) {
+        self.buffer.insert(packet.sequence, packet);
+    }
+    
+    fn pop(&mut self) -> Option<Vec<u8>> {
+        let target = self.last_played.wrapping_add(1);
+        
+        if let Some(packet) = self.buffer.remove(&target) {
+            self.last_played = target;
+            Some(packet.opus_data)
+        } else if self.should_skip(target) {
+            // Packet is too late, skip it
+            self.last_played = target;
+            None  // Opus will conceal the gap
+        } else {
+            None  // Still waiting
+        }
+    }
+}
+```
+
+The `play_delay` is the key parameter:
+- Too short → packets arrive "late" and get dropped → choppy audio
+- Too long → added latency → conversation feels laggy
+
+Typical values: 40-100ms. Adaptive jitter buffers adjust based on observed network conditions.
+
+## Tokio and the Event Loop
+
+Both protocols need to run concurrently. Tokio's `select!` makes this ergonomic:
+
+```rust
+loop {
+    tokio::select! {
+        // TCP: new connection or data on existing connections
+        result = tcp_listener.accept() => {
+            let (socket, addr) = result?;
+            handle_tcp_connection(socket, addr);
+        }
+        
+        // UDP: voice packet arrived
+        result = udp_socket.recv_from(&mut buf) => {
+            let (len, addr) = result?;
+            handle_voice_packet(&buf[..len], addr);
+        }
+        
+        // Periodic: flush jitter buffers, send keepalives
+        _ = interval.tick() => {
+            tick_jitter_buffers();
+        }
+    }
+}
+```
+
+No threads, no blocking. The runtime multiplexes everything onto a small thread pool.
+
+## What I Learned
+
+1. **Protocol choice matters.** TCP and UDP aren't interchangeable. Understand your latency and reliability requirements.
+
+2. **Connectionless doesn't mean stateless.** UDP packets still need to map to application-level sessions. You just have to do it yourself.
+
+3. **Buffering is a tradeoff.** Every millisecond of buffer adds latency but improves quality. There's no universal right answer.
+
+4. **Opus is magic.** Seriously. It handles packet loss, variable bitrate, and sounds great at low bandwidth. Use it.
+
+---
+
+*The code is at [RustyRoom](https://github.com/ernestoCruz05/RustyRoom). Fair warning: it's a learning project, not production-ready.*

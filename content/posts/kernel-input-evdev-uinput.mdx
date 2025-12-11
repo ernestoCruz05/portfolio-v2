@@ -1,0 +1,168 @@
+---
+title: "From Raw USB to Kernel Events: Why I Rewrote My Input Driver"
+date: "2025-12-11"
+description: "Interfacing directly with Linux's evdev and uinput subsystems to build an input remapper that works everywhere - X11, Wayland, and TTY."
+tags: ["linux", "kernel", "c", "systems"]
+published: true
+---
+
+## The Problem
+
+I wanted to remap controller inputs to keyboard events. Simple enough, right? My first instinct was libusb - raw USB access from userspace. But I quickly realized this was the wrong abstraction layer.
+
+**libusb problems:**
+- You're fighting the kernel for device ownership
+- Have to handle USB protocol details (endpoints, interfaces, descriptors)
+- Doesn't work if another driver already claimed the device
+- No standard way to *inject* events back into the system
+
+The Linux kernel already has a beautiful abstraction for input devices: **evdev**. And for creating virtual devices: **uinput**. Why reinvent the wheel?
+
+## evdev: Reading Input the Right Way
+
+Every input device on Linux exposes itself as `/dev/input/eventX`. The kernel's input subsystem normalizes everything - keyboards, mice, gamepads, touchscreens - into a unified event stream.
+
+### Device Discovery
+
+The first challenge: finding the right device. You can't just hardcode `/dev/input/event0`. Devices come and go, indices shift.
+
+```c
+// Iterate through all event devices
+for (int i = 0; i < 32; i++) {
+    char path[64];
+    snprintf(path, sizeof(path), "/dev/input/event%d", i);
+    
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) continue;
+    
+    // Get device name
+    char name[256];
+    ioctl(fd, EVIOCGNAME(sizeof(name)), name);
+    
+    // Check device capabilities
+    unsigned long evbits[NLONGS(EV_CNT)];
+    ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits);
+    
+    // Is it a keyboard? Check for EV_KEY capability
+    if (test_bit(EV_KEY, evbits)) {
+        // Check if it has actual keyboard keys (not just a power button)
+        unsigned long keybits[NLONGS(KEY_CNT)];
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits);
+        
+        if (test_bit(KEY_A, keybits)) {
+            // Found a keyboard
+        }
+    }
+}
+```
+
+The `EVIOCGBIT` ioctl is the key. It returns a bitmap of what event types and codes the device supports. A gamepad has `BTN_A`, `BTN_B`, `ABS_X`, `ABS_Y`. A keyboard has `KEY_A` through `KEY_Z`. This is how you fingerprint devices.
+
+### Reading Events
+
+Once you have the right device, reading is straightforward:
+
+```c
+struct input_event ev;
+while (read(fd, &ev, sizeof(ev)) == sizeof(ev)) {
+    if (ev.type == EV_KEY) {
+        printf("Key %d %s\n", ev.code, ev.value ? "pressed" : "released");
+    }
+}
+```
+
+The `input_event` struct is dead simple:
+- `type`: What kind of event (EV_KEY, EV_REL, EV_ABS)
+- `code`: Which key/axis (KEY_A, BTN_SOUTH, ABS_X)
+- `value`: The value (0=release, 1=press, 2=repeat for keys; actual value for axes)
+
+## uinput: Creating Virtual Devices
+
+Reading is half the battle. To remap inputs, you need to *inject* events. That's where uinput comes in.
+
+uinput lets you create a virtual input device that the kernel treats as real hardware. This is the magic that makes the remapper work on both X11 and Wayland - we're operating below the display server.
+
+```c
+int uinput_fd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
+
+// Declare what events we'll emit
+ioctl(uinput_fd, UI_SET_EVBIT, EV_KEY);
+ioctl(uinput_fd, UI_SET_KEYBIT, KEY_W);  // We'll emit W
+ioctl(uinput_fd, UI_SET_KEYBIT, KEY_A);  // We'll emit A
+ioctl(uinput_fd, UI_SET_KEYBIT, KEY_S);  // etc.
+ioctl(uinput_fd, UI_SET_KEYBIT, KEY_D);
+
+// Set up device info
+struct uinput_setup setup = {
+    .id = {
+        .bustype = BUS_USB,
+        .vendor  = 0x1234,
+        .product = 0x5678,
+    },
+    .name = "InputRelay Virtual Keyboard",
+};
+ioctl(uinput_fd, UI_DEV_SETUP, &setup);
+ioctl(uinput_fd, UI_DEV_CREATE);
+
+// Now we can inject events
+struct input_event ev = {
+    .type = EV_KEY,
+    .code = KEY_W,
+    .value = 1,  // pressed
+};
+write(uinput_fd, &ev, sizeof(ev));
+
+// Don't forget the SYN event to flush
+struct input_event syn = {
+    .type = EV_SYN,
+    .code = SYN_REPORT,
+    .value = 0,
+};
+write(uinput_fd, &syn, sizeof(syn));
+```
+
+**Critical detail**: You must send `SYN_REPORT` after your events. The kernel batches input events and only processes them when it sees a sync. Without it, nothing happens.
+
+## Why This Matters
+
+The beauty of this approach:
+
+1. **Universal compatibility** - Works on X11, Wayland, even raw TTY. We're at the kernel level, below any display server.
+
+2. **No polling** - `read()` blocks until events arrive. The kernel wakes us up.
+
+3. **Low latency** - Direct kernel interface, no middleware.
+
+4. **Device agnostic** - Same code handles any input device. Want to remap a steering wheel? A flight stick? Just adjust the capability checks.
+
+## The Gotchas
+
+A few things that bit me:
+
+**Permissions**: `/dev/input/*` and `/dev/uinput` require root or `input` group membership. Either run as root or add udev rules:
+
+```bash
+# /etc/udev/rules.d/99-input.rules
+KERNEL=="event*", SUBSYSTEM=="input", MODE="0660", GROUP="input"
+KERNEL=="uinput", MODE="0660", GROUP="input"
+```
+
+**Grab the device**: If you don't want the original events to pass through, use `EVIOCGRAB`:
+
+```c
+ioctl(fd, EVIOCGRAB, 1);  // Exclusive access
+```
+
+This prevents the original device events from reaching anything else. Essential for remapping - otherwise you get both the original and remapped events.
+
+**Timestamps**: The kernel expects monotonic timestamps. For injected events, you can use `{0, 0}` and the kernel fills them in, or grab them from `clock_gettime(CLOCK_MONOTONIC)`.
+
+## Conclusion
+
+libusb has its place - custom hardware, non-standard protocols, firmware updates. But for standard input devices, evdev/uinput is the right tool. You're working *with* the kernel's input subsystem, not against it.
+
+The code is at [InputRelay](https://github.com/ernestoCruz05/InputRelay) if you want to dig deeper.
+
+---
+
+*Next up: I might write about the async architecture in RustyRoom - mixing UDP voice with TCP chat in Rust.*

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { MDXRemote } from "next-mdx-remote/rsc";
 import rehypePrettyCode from "rehype-pretty-code";
 import type { Metadata } from "next";
+import Mermaid from "@/app/components/Mermaid";
 
 // Custom components for MDX
 const components = {
@@ -56,6 +57,7 @@ const components = {
     td: (props: React.HTMLAttributes<HTMLTableCellElement>) => (
         <td className="px-4 py-2 border-b border-gray-100" {...props} />
     ),
+    Mermaid,
 };
 
 // Generate static params for all posts
@@ -96,43 +98,107 @@ export default async function PostPage({
     }
 
     return (
-        <main className="min-h-screen pt-24 pb-16 font-sans bg-[#f8f9fa]">
-            <article className="max-w-3xl mx-auto px-6">
+        <main className={`min-h-screen pt-24 pb-16 font-sans ${post.draft ? '' : 'bg-[#f8f9fa]'}`}
+            style={post.draft ? {
+                background: `
+                    linear-gradient(90deg, transparent 79px, #f87171 79px, #f87171 81px, transparent 81px),
+                    repeating-linear-gradient(
+                        transparent,
+                        transparent 31px,
+                        #93c5fd 31px,
+                        #93c5fd 32px
+                    ),
+                    #ffffff
+                `,
+                backgroundAttachment: 'local',
+            } : {}}>
+            {/* Crumpled paper texture overlay for drafts */}
+            {post.draft && (
+                <>
+                    <div className="fixed inset-0 opacity-[0.35] pointer-events-none z-0"
+                        style={{
+                            backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E")`,
+                        }}
+                    />
+                    {/* Crumple fold lines */}
+                    <div className="fixed inset-0 pointer-events-none z-0 opacity-[0.06]"
+                        style={{
+                            backgroundImage: `
+                                linear-gradient(135deg, transparent 30%, rgba(0,0,0,0.3) 35%, transparent 40%),
+                                linear-gradient(225deg, transparent 30%, rgba(0,0,0,0.2) 35%, transparent 40%),
+                                linear-gradient(315deg, transparent 50%, rgba(0,0,0,0.2) 55%, transparent 60%),
+                                linear-gradient(45deg, transparent 60%, rgba(255,255,255,0.4) 65%, transparent 70%)
+                            `,
+                            backgroundSize: '400px 400px',
+                        }}
+                    />
+                </>
+            )}
+            <article className={`max-w-3xl mx-auto px-6 relative z-10 ${post.draft ? 'pl-24' : ''}`}>
                 {/* Back Link */}
                 <Link
                     href="/blog"
-                    className="inline-flex items-center gap-2 text-gray-600 hover:text-blue-700 mb-8 transition-colors"
+                    className={`inline-flex items-center gap-2 mb-8 transition-colors ${
+                        post.draft ? 'text-blue-600 hover:text-blue-800 font-mono' : 'text-gray-600 hover:text-blue-700'
+                    }`}
                 >
                     <span>←</span> Back to all posts
                 </Link>
 
+                {/* Draft Banner */}
+                {post.draft && (
+                    <div className="mb-8 p-4 bg-white/90 border-2 border-blue-300 rounded-sm shadow-md">
+                        <div className="flex items-center gap-3 font-mono">
+                            <span className="text-2xl">📝</span>
+                            <div>
+                                <p className="font-bold text-blue-800">Draft Document</p>
+                                <p className="text-sm text-gray-600">This write-up is incomplete. Contents may change.</p>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {/* Post Header */}
                 <header className="mb-8">
                     <div className="flex flex-wrap gap-2 mb-4">
+                        {post.draft && (
+                            <span className="text-xs text-red-500 px-2 py-0.5 border border-red-300 rounded-sm bg-white/80 font-mono">
+                                ✎ DRAFT
+                            </span>
+                        )}
                         {post.tags.map((tag) => (
                             <span
                                 key={tag}
-                                className="text-xs font-mono bg-blue-50 text-blue-700 px-2 py-1 rounded border border-blue-100"
+                                className={`text-xs px-2 py-1 rounded ${
+                                    post.draft 
+                                        ? 'text-blue-600 bg-white/50 font-mono' 
+                                        : 'font-mono bg-blue-50 text-blue-700 border border-blue-100'
+                                }`}
                             >
-                                {tag}
+                                {post.draft ? `[${tag}]` : tag}
                             </span>
                         ))}
                     </div>
-                    <h1 className="text-4xl md:text-5xl font-extrabold text-gray-900 mb-4 leading-tight">
+                    <h1 className={`text-4xl md:text-5xl font-extrabold mb-4 leading-tight ${
+                        post.draft ? 'text-blue-900' : 'text-gray-900'
+                    }`}
+                        style={post.draft ? { fontFamily: 'Georgia, serif' } : {}}>
                         {post.title}
                     </h1>
-                    <p className="text-xl text-gray-600 mb-4">
+                    <p className={`text-xl mb-4 ${post.draft ? 'text-gray-700 italic' : 'text-gray-600'}`}>
                         {post.description}
                     </p>
-                    <div className="flex items-center gap-4 text-sm text-gray-500 pb-6 border-b border-gray-200">
+                    <div className={`flex items-center gap-4 text-sm pb-6 border-b ${
+                        post.draft ? 'text-blue-600 border-blue-200 font-mono' : 'text-gray-500 border-gray-200'
+                    }`}>
                         <span>
                             {new Date(post.date).toLocaleDateString("en-US", {
                                 year: "numeric",
-                                month: "long",
+                                month: post.draft ? "short" : "long",
                                 day: "numeric",
                             })}
                         </span>
-                        <span>•</span>
+                        <span>{post.draft ? '|' : '•'}</span>
                         <span>{post.readingTime}</span>
                     </div>
                 </header>

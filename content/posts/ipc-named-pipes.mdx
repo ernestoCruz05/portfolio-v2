@@ -1,0 +1,90 @@
+---
+title: "IPC from Scratch: Building a Message Bus with Named Pipes"
+date: "2025-12-09"
+description: "Why I used FIFOs instead of sockets, the message interleaving problem, and rolling my own persistence layer."
+tags: ["c", "linux", "ipc", "systems"]
+draft: true
+published: true
+---
+
+## Why Named Pipes?
+
+*This is a draft - some sections are incomplete.*
+
+Sockets are the default for IPC. But for a local-only pub/sub system, named pipes (FIFOs) have appeal:
+
+- No port allocation
+- No TCP overhead
+- Filesystem-based discovery
+- Simpler mental model
+
+The Unix philosophy: everything is a file. Let's lean into it.
+
+## The Architecture
+
+```
+                    ┌─────────────────┐
+                    │     Manager     │
+                    │   (manager.c)   │
+                    └────────┬────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              │              │              │
+              ▼              ▼              ▼
+        /tmp/topic_A   /tmp/topic_B   /tmp/topic_C
+              │              │              │
+              ▼              ▼              ▼
+         [Subscribers]  [Subscribers]  [Subscribers]
+```
+
+Each topic is a FIFO. Publishers write to it. Subscribers read from it.
+
+Simple? Yes. But there's a catch...
+
+## The Interleaving Problem
+
+*TODO: Expand this section*
+
+When multiple publishers write to the same FIFO simultaneously, their messages can interleave:
+
+```
+Publisher A writes: "Hello World"
+Publisher B writes: "Goodbye"
+
+FIFO might contain: "HelGoodlo Wbyeorld"
+```
+
+The fix: **length-prefixed messages** and **atomic writes**.
+
+```c
+// Message format: [4-byte length][payload]
+struct message {
+    uint32_t length;
+    char payload[];
+};
+```
+
+Writes under `PIPE_BUF` (typically 4096 bytes) are atomic on Linux. For larger messages, need a mutex or separate FIFOs per publisher.
+
+## Persistence: A Poor Man's WAL
+
+*TODO: Implement and document*
+
+Messages are ephemeral by default. For persistence, I'm thinking:
+
+1. Append every message to a log file
+2. On startup, replay the log
+3. Periodic compaction
+
+Essentially a write-ahead log, but simpler. No crash recovery guarantees - this is a learning project, not Kafka.
+
+## What's Missing
+
+- [ ] Proper error handling
+- [ ] Subscriber disconnect detection
+- [ ] Message acknowledgment
+- [ ] Log compaction implementation
+
+---
+
+*This post is a work in progress. Check back for updates, or see the code at [unix-topic-chat](https://github.com/ernestoCruz05/unix-topic-chat).*
