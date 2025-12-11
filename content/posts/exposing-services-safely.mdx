@@ -40,35 +40,43 @@ iptables -A FORWARD -i vlan10 -o eth0 -m state --state ESTABLISHED,RELATED -j AC
 - **Free SSL** - Automatic certificate management
 - **Access control** - Built-in authentication options
 
-### Setting It Up
+### The Architecture
+
+In my setup, **cloudflared runs directly on the host as a systemd service** (not in Docker), while all my applications run in containers. The tunnel is configured through the Cloudflare dashboard - no local config files needed.
+
+The key is using a shared Docker network that all services connect to, with a reverse proxy handling the internal routing:
 
 ```yaml
-# cloudflared config.yml
-tunnel: my-tunnel-id
-credentials-file: /etc/cloudflared/credentials.json
-
-ingress:
-  - hostname: portfolio.faky.dev
-    service: http://localhost:3000
-  - hostname: service.faky.dev
-    service: http://192.168.1.100:8080
-  - service: http_status:404
-```
-
-### Docker Compose Integration
-
-```yaml
-version: "3.8"
 services:
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    command: tunnel run
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+  reverse-proxy:
+    image: <reverse-proxy-image>
+    ports:
+      - "80:80"
+      - "443:443"
     networks:
-      - proxy
+      - internal
+
+  my-service:
+    build: ./app
+    expose:
+      - "8000"  # Only accessible within Docker network
+    networks:
+      - internal
+
+networks:
+  internal:
+    external: true
 ```
+
+### Traffic Flow
+
+1. **Internet** → Request hits Cloudflare's edge network
+2. **Cloudflare** → Routes through the tunnel to my server
+3. **cloudflared (host)** → Forwards to the reverse proxy on port 80
+4. **Reverse Proxy** → Routes based on hostname to the correct container
+5. **Service** → Responds back through the same path
+
+The beauty of this setup is that services use `expose` instead of `ports` - they're only reachable through the internal Docker network, never directly from the host.
 
 ## Lessons Learned
 
