@@ -1,0 +1,91 @@
+---
+title: "The Hard Way vs. The Right Way: Exposing Services Safely"
+date: "2025-12-11"
+description: "My journey from port forwarding with VLANs to Cloudflare Tunnels - lessons learned in securing self-hosted infrastructure."
+tags: ["networking", "security", "self-hosting", "cloudflare"]
+published: true
+---
+
+## Introduction
+
+When I first started self-hosting services, I did what most people do: opened ports on my router and hoped for the best. Well, not exactly - I went a bit further with VLANs and firewall rules. But looking back, there's a much better way.
+
+This is the story of how I evolved my home network security, and why I ultimately switched to Cloudflare Tunnels.
+
+## The Hard Way: Port Forwarding + VLANs
+
+### Initial Setup
+
+My first approach was the "traditional" way:
+
+```bash
+# Example iptables rules I was using
+iptables -A FORWARD -i eth0 -o vlan10 -p tcp --dport 443 -j ACCEPT
+iptables -A FORWARD -i vlan10 -o eth0 -m state --state ESTABLISHED,RELATED -j ACCEPT
+```
+
+### The Problems
+
+1. **Exposing my home IP** - Not an issue, but nobody likes it
+2. **DDoS vulnerability** - No protection against attacks
+3. **Complex firewall management** - Rules got messy fast
+4. **SSL certificate headaches** - Had to manage Let's Encrypt renewals
+
+## The Right Way: Cloudflare Tunnels
+
+### Why Tunnels?
+
+- **Zero exposed ports** - Nothing open on my firewall
+- **DDoS protection** - Cloudflare handles it
+- **Free SSL** - Automatic certificate management
+- **Access control** - Built-in authentication options
+
+### Setting It Up
+
+```yaml
+# cloudflared config.yml
+tunnel: my-tunnel-id
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: portfolio.faky.dev
+    service: http://localhost:3000
+  - hostname: service.faky.dev
+    service: http://192.168.1.100:8080
+  - service: http_status:404
+```
+
+### Docker Compose Integration
+
+```yaml
+version: "3.8"
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    networks:
+      - proxy
+```
+
+## Lessons Learned
+
+1. **Security through obscurity isn't security** - But not exposing your IP is still smart
+2. **Simple is better** - Fewer moving parts = fewer things to break
+3. **Use managed services for what they're good at** - Let Cloudflare handle DDoS
+
+## Conclusion
+
+The "hard way" taught me a lot about networking, firewalls, and VLANs. That knowledge is invaluable. But for production use, the "right way" with Cloudflare Tunnels is:
+
+- More secure
+- Easier to maintain
+- Free (for basic usage)
+
+Sometimes the best solution isn't the most complex one.
+
+---
+
+*Have questions about this setup? Feel free to reach out!*
