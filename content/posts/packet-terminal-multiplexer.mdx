@@ -1,0 +1,114 @@
+---
+title: "Why I Built Packet: My attempt at a terminal"
+date: "2025-12-23"
+description: "How configuring 60+ Cisco switches drove me to build a custom terminal multiplexer using Rust, Tauri, and React."
+tags: ["rust", "tauri", "react", "networking", "engineering"]
+published: true
+---
+
+## The Spark
+
+It started with a university project. I was staring down the barrel of configuring over 60 Cisco L3 switches.
+
+My teacher swore by [SecureCRT](https://www.vandyke.com/products/securecrt/). It’s the industry standard for a reason—it’s reliable and has great broadcasting features. But it’s also expensive and feels like software from another era. I tried alternatives like SuperPutty, but they felt clunky or lacked the specific integrations I needed for my lab environment.
+
+I didn't want to copy-paste the same VLAN configuration 60 times. I needed a tool that could:
+1. Handle multiple tabbed sessions easily.
+2. **Broadcast** commands to all (or specific) tabs simultaneously.
+3. Integrate seamlessly with GNS3, acting as the default console application.
+
+So, I decided to build **Packet**.
+
+## The Stack
+
+I chose **Tauri** because I wanted the performance of a native backend with the flexibility of a web frontend.
+* **Backend**: Rust (for reliable PTY management and Telnet streams).
+* **Frontend**: React + TypeScript (using `xterm.js` for rendering).
+
+## The Struggles
+
+Building a terminal sounds simple—pipe `stdin` to a process and `stdout` to a window—but the devil is in the details. Here are a few technical hurdles I hit along the way.
+
+### 1. Taming the PTY in Rust
+
+Getting a pseudo-terminal (PTY) to behave correctly across platforms is a nightmare. I used `portable-pty` in Rust, but managing the lifecycle of these sessions was tricky.
+
+I had to create a global, thread-safe store for sessions using `Lazy` and `Mutex` to ensure the Tauri commands could access them from any thread:
+
+```rust
+// src-tauri/src/pty.rs
+static PTY_SESSIONS: Lazy<Arc<Mutex<HashMap<String, PtySession>>>> = Lazy::new(|| {
+    Arc::new(Mutex::new(HashMap::new()))
+});
+```
+
+### The Reading Loop
+
+The real challenge was the reading loop. I had to spawn a background thread for every active terminal to read the PTY output and emit it back to the frontend without blocking the main thread or causing data races.
+
+### 2. The React State "Stale Closure" Trap
+
+The feature I needed most—broadcasting commands—was the hardest to implement in React.
+
+I created a `TerminalContext` to manage the state of active sessions. The logic seemed sound: when I press a key, iterate through sessions and send that keystroke to the backend for every active ID.
+
+But I kept running into a classic React bug: stale closures.
+
+When my `broadcastKeystroke` function ran, it was "remembering" the version of the `sessions` array from when the component first mounted, not the current one. I would add 5 tabs, type a command, and... nothing would happen, because the function thought the array was still empty.
+
+I had to use a `useRef` to keep a "live" reference to the state that my event handlers could access:
+
+```ts
+// src/context/TerminalContext.tsx
+const [sessions, setSessions] = useState<TerminalSession[]>([]);
+const sessionsRef = useRef<TerminalSession[]>(sessions);
+
+// Keep the ref in sync
+useEffect(() => {
+    sessionsRef.current = sessions;
+}, [sessions]);
+
+const broadcastKeystroke = useCallback((key: string, groupId?: string | null) => {
+    // Access current state immediately without waiting for re-renders
+    const currentSessions = sessionsRef.current;
+    // ... broadcasting logic
+}, []);
+```
+
+### 3. GNS3 Integration
+
+Making Packet the default console for GNS3 was a key goal. GNS3 essentially runs a command line command to open a console. I had to implement a "single instance" mechanism.
+
+If Packet is already open, running `packet --host 127.0.0.1 --port 5000` shouldn't open a new window. It should detect the existing process, pass the arguments via a local socket, and open a new tab in the existing window. That required some deep diving into Tauri's single-instance plugin and event system.
+
+### 4. The "Zombie Terminal" (React vs. The DOM)
+
+The most frustrating bug I hit was the "Blank Screen" nightmare.
+
+In React, when you move a component to a new parent (like dragging a terminal tab into a new "Group"), the component unmounts and remounts. When the `TerminalPanel` unmounted, it destroyed the `<div>` that `xterm.js` was attached to.
+
+The result? The Rust backend PTY was still running fine, receiving data and sending it to the frontend. But the frontend display was just... blank. The terminal instance had been garbage collected, or worse, was trying to write to a DOM node that no longer existed.
+
+I had to build a mechanism to "detach" the terminal DOM element and store it in memory before the component unmounted, then "re-attach" it when the component came back.
+
+```typescript
+// src/components/TerminalPanel.tsx
+
+// If already initialized, re-attach the existing terminal's DOM to this container
+if (initializedSessions.has(session.id) && session.terminal) {
+    const xtermElement = session.terminal.element;
+    
+    if (xtermElement && terminalRef.current) {
+        // Clear the container and append the existing xterm element
+        // This rescues the session from React's unmount/remount cycle
+        terminalRef.current.innerHTML = '';
+        terminalRef.current.appendChild(xtermElement);
+    }
+}
+```
+
+## The Result
+
+Packet is now my daily driver. It handles local shells (bash/zsh) and Telnet connections perfectly. The broadcasting feature saved me hours on that switch project, and the "Group" feature lets me organize switches by layer or location and target commands specifically to them.
+
+It's not perfect yet, but it's mine.
